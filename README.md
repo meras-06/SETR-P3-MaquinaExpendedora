@@ -45,7 +45,7 @@ La elección de pines se ha planificado cuidadosamente para evitar conflictos de
 
 ### 2.3. Montaje en el simulador: CirkitDesigner
 
-![Montaje en CirkitDesigner](img/esquematico.png)
+![Montaje en CirkitDesigner](montaje_simulado.png)
 
 ### 2.4. Montaje real
 
