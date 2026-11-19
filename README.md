@@ -195,6 +195,63 @@ Analizando el firmware completo, los puntos críticos donde un fallo eléctrico,
 
 ---
 
+### 5.2. Comportamiento detallado por modo
+
+#### 1. Modo Arranque (`MODO_ARRANQUE`)
+* Al energizar o reiniciar la placa Arduino UNO, la pantalla LCD muestra el mensaje **`CARGANDO`**.
+* De forma simultánea, el hilo `led1Thread` (configurado con un intervalo de `1000 ms`) conmuta automáticamente el estado de `LED1` sin bloquear el programa.
+* Cuando `led1Thread->cambiosRealizados` alcanza `6` conmutaciones (`ON-OFF-ON-OFF-ON-OFF`), se completan exactamente los **3 parpadeos en intervalos de 1 segundo**.
+* En ese instante, se invoca `entrarModoServicio()`, que deshabilita el hilo de parpadeo (`led1Thread->enabled = false`) para liberar recursos de CPU, apaga por completo `LED1` y transiciona automáticamente al Modo Servicio.
+
+#### 2. Modo Servicio (`MODO_SERVICIO`)
+Constituye el estado principal de atención al cliente y se divide en cinco subestados no bloqueantes gestionados mediante `millis()`:
+
+* **a. Detección de presencia (`SERV_ESPERA`):**
+  * Mientras la distancia medida en segundo plano por `usThread` sea igual o superior a 1 metro (`usThread->distanciaCm >= 100.0`), el LCD permanece mostrando **`ESPERANDO CLIENTE`**.
+  * En cuanto un usuario se sitúa a menos de 1 metro (`< 100.0 cm`), se guarda la marca temporal `tInicioFase = millis()` y el sistema transiciona de inmediato a la fase de interacción.
+
+* **b. Monitorización de entorno (`SERV_ENTORNO`):**
+  * Al detectar presencia, el LCD presenta la temperatura (`°C`) y la humedad (`%`) obtenidas por `dhtThread`, refrescando los valores cada segundo durante un intervalo total de **5 segundos** (`millis() - tInicioFase >= 5000`).
+
+* **c. Catálogo de productos y selección (`SERV_CATALOGO`):**
+  * Transcurridos los 5 segundos, se muestra el catálogo circular de 5 bebidas definido en `Catalogo.h` junto con su precio actualizado con dos decimales:
+    * `Café Solo` — **1.00 €**
+    * `Café Cortado` — **1.10 €**
+    * `Café Doble` — **1.25 €**
+    * `Café Premium` — **1.50 €**
+    * `Chocolate` — **2.00 €**
+  * La navegación entre productos se realiza desplazando el joystick hacia arriba (`JOY_UP`) o hacia abajo (`JOY_DOWN`) con aritmética modular circular, y la selección se confirma pulsando el botón integrado del joystick (`JOY_CLICK`).
+
+* **d. Preparación de la bebida (`SERV_PREPARANDO`):**
+  * Al confirmar el producto, se genera una duración pseudoaleatoria diferente en cada servicio entre **4 y 8 segundos** mediante `tPreparacion = random(4000, 8001)` (inicializado con `randomSeed(analogRead(PIN_SEED))` en `setup()`).
+  * El LCD muestra **`Preparando Cafe...`** mientras se calcula en cada ciclo el porcentaje de avance (`transcurrido = millis() - tInicioFase`) y se mapea linealmente al rango PWM de 8 bits con `map(transcurrido, 0, tPreparacion, 0, 255)`, aumentando de forma progresiva el brillo de `LED2` (Pin 6, Timer0) del 0% al 100%.
+
+* **e. Retirada de bebida (`SERV_RETIRE`):**
+  * Al concluir `tPreparacion`, se apaga por completo `LED2` y el LCD muestra **`RETIRE BEBIDA`** durante **3 segundos** (`3000 ms`), tras los cuales el sistema retorna automáticamente al reposo (`SERV_ESPERA`).
+
+* **f. Cancelación y reinicio de estado (Botón externo 2–3 s):**
+  * En cualquier instante durante la interacción con el cliente (desde `SERV_ENTORNO` hasta `SERV_RETIRE`), mantener presionado el botón externo entre **2 y 3 segundos** activa la bandera `flagCancelarServicio` desde la interrupción hardware `INT0`.
+  * El controlador aborta de inmediato la operación en curso, apaga el PWM de `LED2` y reinicia el estado interno de vuelta a `SERV_ESPERA` sin reiniciar físicamente la placa Arduino.
+
+#### 3. Modo Administración (`MODO_ADMIN`)
+Permite la supervisión técnica en tiempo real y el ajuste dinámico de precios:
+
+* **a. Acceso y salida (Botón externo ≥ 5 s):**
+  * Es accesible desde cualquier modo manteniendo pulsado el botón externo durante **al menos 5 segundos consecutivos** (`>= 5000 ms`). Gracias a `verificarPulsacionLargaAdmin()`, la conmutación ocurre en el instante exacto en que se cumplen los 5 segundos.
+  * Para abandonar la consola de administración y regresar al Modo Servicio se repite la misma pulsación continua de ≥ 5 segundos.
+
+* **b. Indicadores de estado:**
+  * Al entrar en `MODO_ADMIN` mediante `entrarModoAdmin()`, ambos indicadores luminosos (`LED1` y `LED2`) quedan encendidos de forma fija (`HIGH`) durante toda la estancia en este modo.
+
+* **c. Menú de administración y navegación (`ADM_MENU`):**
+  * El LCD despliega las 4 opciones (`a.Ver temp`, `b.Ver distancia`, `c.Ver contador`, `d.Modif precios`), navegables con el joystick arriba/abajo y seleccionables mediante su pulsador (`JOY_CLICK`).
+  * Desplazar el joystick hacia la izquierda (`JOY_LEFT`) permite retroceder un nivel desde cualquier vista o submenú:
+    1. **Ver temperatura (`ADM_TEMP`):** Muestra dinámicamente en tiempo real las lecturas del DHT11 (`Temp: XX C` y `Hum: YY %`), refrescando la pantalla cada `500 ms`.
+    2. **Ver distancia sensor (`ADM_DIST`):** Muestra la distancia actual en centímetros medida por el HC-SR04 (`Distancia: XX cm`), refrescada dinámicamente cada `250 ms`.
+    3. **Ver contador (`ADM_CONT`):** Muestra el tiempo en segundos transcurrido desde el encendido de la placa (`contadorSegundos`), actualizándose exactamente segundo a segundo gracias a la interrupción software de `Timer1`.
+    4. **Modificar precios (`ADM_SEL_PRECIO` → `ADM_EDIT_PRECIO`):** Presenta la lista de productos para seleccionar el deseado. Al pulsar el botón del joystick se carga su importe en una copia temporal `precioTemp`, que puede incrementarse o decrementarse en tramos de **5 céntimos (`0.05 €`)** moviendo el joystick arriba o abajo. Pulsar el botón confirma y guarda el nuevo importe en `catalogo[indiceProd].precio` (reflejándose de inmediato al volver al Modo Servicio, sin necesidad de EEPROM), mientras que mover el joystick a la izquierda descarta los cambios y regresa al listado.
+---
+
 ## 6. Conclusiones
 
 El desarrollo de esta práctica ha permitido aplicar de forma integrada los principios fundamentales de los sistemas empotrados y de tiempo real sobre un microcontrolador de recursos limitados como el **ATmega328P** de Arduino UNO:
