@@ -43,17 +43,13 @@ La elección de pines se ha planificado cuidadosamente para evitar conflictos de
 | **HC-SR04** | TRIG / ECHO | **A2** / **A3** | Pines analógicos empleados como GPIO digitales para liberar los pines serie `0` y `1`. |
 | **Semilla aleatoria** | *(Sin conectar)* | **A5** | Lectura de ruido analógico flotante para `randomSeed()`. |
 
-### 2.3. Esquemático del circuito (Tinkercad / Fritzing)
+### 2.3. Montaje en el simulador: CirkitDesigner
 
-<!-- Sustituye la ruta por tu imagen del esquemático -->
-![Esquemático del circuito en Tinkercad/Fritzing](img/esquematico.png)
+![Montaje en CirkitDesigner](img/esquematico.png)
 
-### 2.4. Fotos del montaje real
+### 2.4. Montaje real
 
-<!-- Sustituye las rutas por tus fotos reales del montaje en protoboard -->
-| Vista general del circuito | Detalle de la pantalla LCD y sensores |
-| :---: | :---: |
-| ![Vista general del montaje](img/montaje_general.jpg) | ![Detalle del montaje](img/montaje_detalle.jpg) |
+| ![Vista general del montaje](img/montaje_general.jpg) |
 
 ---
 
