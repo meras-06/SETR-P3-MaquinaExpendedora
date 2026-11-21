@@ -53,7 +53,7 @@ La elección de pines se ha planificado para evitar conflictos de periféricos i
 
  ### 2.5. Vídeo del funcionamiento 
 
- ![Vídeo del funcionamiento](video.mp4)
+ [Vídeo del funcionamiento](video.mp4)
 
 ---
 
@@ -124,7 +124,7 @@ Al inicio de `setup()` se ejecuta `wdt_disable()` seguido de `wdt_enable(WDTO_4S
 * Un umbral de **4 segundos** proporciona un margen holgado para descartar falsos reinicios durante el funcionamiento normal, pero asegura una recuperación rápida si el microcontrolador sufre un bloqueo real.
 
 #### Influencia del Watchdog:
-En cada iteración completa de `loop()` se garantiza que el conjunto `controller.run()` + `actualizarMaquinaExpendedora()` termine siempre por debajo de 4 segundos y llegue a `wdt_reset()`. Además, en todos los threads de periféricos (`UltrasonidosThread`, `DHTThread`, `JoystickThread`, `LedThread`) también debido a que `ArduinoThread` es cooperativo, si cualquier `run()` se quedara colgado, `controller.run()` nunca devolvería el control al `loop()` y el Watchdog resetearía la placa automáticamente. En el tramo de `setup()` posterior a `wdt_enable(WDTO_4S)`, si la inicialización de algún periférico (`lcd.begin()`, `dht.begin()`, etc.) bloqueara el arranque más de 4 segundos, el Watchdog forzaría un nuevo intento de arranque. También sucedería si el procesador quedase atrapado en una ISR o con las interrupciones globales deshabilitadas (`noInterrupts()`), el Watchdog opera por hardware de forma independiente y resetearía el sistema al cumplirse los 4 segundos.
+En cada iteración completa de `loop()` se garantiza que el conjunto `controller.run()` + `actualizarMaquinaExpendedora()` termine siempre por debajo de 4 segundos y llegue a `wdt_reset()`. Además, al ser `ArduinoThread` cooperativo, si el `run()` de cualquiera de los hilos de periféricos (`UltrasonidosThread`, `DHTThread`, `JoystickThread`, `LedThread`) se quedara colgado, `controller.run()` nunca devolvería el control al `loop()` y el Watchdog resetearía la placa automáticamente. En el tramo de `setup()` posterior a `wdt_enable(WDTO_4S)`, si la inicialización de algún periférico (`lcd.begin()`, `dht.begin()`, etc.) bloqueara el arranque más de 4 segundos, el Watchdog forzaría un nuevo intento de arranque. Lo mismo ocurriría si el procesador quedase atrapado en una ISR o con las interrupciones globales deshabilitadas (`noInterrupts()`), ya que el Watchdog opera por hardware de forma independiente y resetearía el sistema al cumplirse los 4 segundos.
 
 #### NO influencia del Watchdog:
 El Watchdog supervisa *disponibilidad temporal* (que el flujo no esté congelado), pero **no puede detectar**:
@@ -137,7 +137,7 @@ El Watchdog supervisa *disponibilidad temporal* (que el flujo no esté congelado
 Analizando el código, los puntos críticos donde un fallo eléctrico, de bus o de software podría congelar la CPU y disparar el Watchdog son:
 1. **`UltrasonidosThread.h` → `pulseIn(pinEcho, HIGH, 25000)`:** debido a que es una llamada intrínsecamente bloqueante a la espera del eco. Aunque en el código se ha acotado con un timeout de `25000 us` para evitar bloqueos prolongados, cualquier fallo grave del pin `ECHO` sin timeout o bucles de reintento mal controlados detendrían aquí el flujo principal hasta disparar el Watchdog.
 2. **`DHTThread.h` → `dht.readTemperature()` / `dht.readHumidity()`:** ya que la librería de Adafruit lee la trama de 40 bits mediante bucles `while` cronometrados en microsegundos con secciones críticas donde desactiva interrupciones. Un fallo eléctrico en la línea de datos `PIN_DHT` que impidiera salir de esas esperas de sincronización haría que el Watchdog reiniciase la placa a los 4 segundos.
-3. ** `Interrupciones.h` (`isrBotonExterno`):** si el Pin 2 disparase `INT0` de manera continuada, la CPU no lograría volver al `loop()` para ejecutar `wdt_reset()`, activándose el reinicio de seguridad.
+3. **`Interrupciones.h` (`isrBotonExterno`):** si el Pin 2 disparase `INT0` de manera continuada, la CPU no lograría volver al `loop()` para ejecutar `wdt_reset()`, activándose el reinicio de seguridad.
 4. **Bloqueo en `MaquinaEstados.h`:** si alguna modificación introdujese un bucle de espera bloqueante que nunca cumpliese su condición de salida, transcurridos 4 segundos exactos el Watchdog reiniciaría el microcontrolador y devolvería la máquina al **Modo Arranque**.
 
 ---
@@ -201,10 +201,10 @@ Permite la supervisión técnica en tiempo real y el ajuste dinámico de precios
 
 ## 6. Conclusiones
 
-Con el desarrollo de esta práctica se han puesto en práctica los principales recursos del ATmega328P del Arduino UNO: entradas analógicas (ADC), salidas PWM, interrupciones, temporizadores, hilos cooperativos y el Watchdog.
+A lo largo de esta práctica se han trabajado los principales recursos del ATmega328P del Arduino UNO: entradas analógicas (ADC), salidas PWM, interrupciones, temporizadores, hilos cooperativos y el Watchdog.
 
-Dividir el código en 9 ficheros (encapsulando cada periférico en su propia clase heredada de Thread) ha facilitado bastante la depuración y ha permitido dejar un loop() muy limpio. Gracias a ThreadController y a los controles de tiempo con millis() se ha eliminado por completo delay(), logrando leer los sensores, actualizar el LCD y variar el brillo de LED2 por PWM sin congelar el programa, además de desactivar los hilos cuando ya no hacen falta (enabled = false).
+Dividir el código en 9 ficheros (encapsulando cada periférico en su propia clase heredada de `Thread`) ha facilitado bastante la depuración y ha permitido dejar un `loop()` muy limpio. Gracias a `ThreadController` y a los controles de tiempo con `millis()` se ha eliminado por completo `delay()`, logrando leer los sensores, actualizar el LCD y variar el brillo de `LED2` por PWM sin congelar el programa, además de desactivar los hilos cuando ya no hacen falta (`enabled = false`).
 
-Por otro lado, usar la interrupción externa INT0 (Pin 2) con anti-rebote ha permitido distinguir sin fallos entre la pulsación de cancelación (2–3 s) y la de administración (≥ 5 s), mientras que TimerOne se encarga de llevar el contador de segundos con precisión. Para evitar que Timer1 interfiriera con el PWM, se llevó LED2 al Pin 6 (gobernado por Timer0). A esto se suma el Watchdog configurado a 4 segundos (WDTO_4S), que actúa como respaldo por si algún sensor o interrupción llegase a colgar la placa.
+Por otro lado, usar la interrupción externa `INT0` (Pin 2) con anti-rebote ha permitido distinguir sin fallos entre la pulsación de cancelación (2–3 s) y la de administración (≥ 5 s), mientras que `TimerOne` se encarga de llevar el contador de segundos con precisión. Para evitar que `Timer1` interfiriera con el PWM, se llevó `LED2` al Pin 6 (gobernado por `Timer0`). A esto se suma el Watchdog configurado a 4 segundos (`WDTO_4S`), que actúa como respaldo por si algún sensor o interrupción llegase a colgar la placa.
 
-Por último, pasar de la simulación en CirkitDesigner al montaje real en protoboard sacó a la luz problemas prácticos que en el simulador no aparecen, como el ajuste fino del contraste del LCD (V0) con el pin RW a masa, los rebotes físicos del pulsador o la necesidad de meter una zona muerta en los ejes del joystick para que el menú no salte solo.
+Por último, pasar de la simulación en CirkitDesigner al montaje real en protoboard sacó a la luz problemas prácticos que en el simulador no aparecen, como el ajuste fino del contraste del LCD (`V0`) con el pin `RW` a masa, los rebotes físicos del pulsador o la necesidad de meter una zona muerta en los ejes del joystick para que el menú no salte solo.
