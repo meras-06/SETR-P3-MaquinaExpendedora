@@ -49,11 +49,11 @@ La elección de pines se ha planificado para evitar conflictos de periféricos i
 
 ### 2.4. Montaje real
 
- ![Vista general del montaje](montaje_real.jpeg)
+![Vista general del montaje](montaje_real.jpeg)
 
- ### 2.5. Vídeo del funcionamiento 
+### 2.5. Vídeo del funcionamiento 
 
- [Vídeo del funcionamiento](video.mp4)
+[Vídeo del funcionamiento](video.mp4)
 
 ---
 
@@ -197,6 +197,7 @@ Permite la supervisión técnica en tiempo real y el ajuste dinámico de precios
     2. **Ver distancia sensor (`ADM_DIST`):** Muestra la distancia actual en centímetros medida por el HC-SR04 (`Distancia: XX cm`), refrescada dinámicamente cada `250 ms`.
     3. **Ver contador (`ADM_CONT`):** Muestra el tiempo en segundos transcurrido desde el encendido de la placa (`contadorSegundos`), actualizándose exactamente segundo a segundo gracias a la interrupción software de `Timer1`.
     4. **Modificar precios (`ADM_SEL_PRECIO` → `ADM_EDIT_PRECIO`):** Presenta la lista de productos para seleccionar el deseado. Al pulsar el botón del joystick se carga su importe en una copia temporal `precioTemp`, que puede incrementarse o decrementarse en tramos de **5 céntimos (`0.05 €`)** moviendo el joystick arriba o abajo. Pulsar el botón confirma y guarda el nuevo importe en `catalogo[indiceProd].precio` (reflejándose de inmediato al volver al Modo Servicio, sin necesidad de EEPROM), mientras que mover el joystick a la izquierda descarta los cambios y regresa al listado.
+
 ---
 
 ## 6. Conclusiones
