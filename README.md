@@ -51,6 +51,10 @@ La elección de pines se ha planificado cuidadosamente para evitar conflictos de
 
  ![Vista general del montaje](montaje_real.jpeg)
 
+ ### 2.5. Vídeo del funcionamiento 
+
+ ![Vídeo del funcionamiento](video.mp4)
+
 ---
 
 ## 3. Arquitectura Software
