@@ -75,129 +75,104 @@ Practica3/
 ```
 ---
 
-## 4. Recursos de Tiempo Real utilizados:
+## 4. Recursos de Tiempo Real utilizados
 
 ### 4.1. Multitarea cooperativa con `ArduinoThread`
 
-En un microcontrolador como el **ATmega328P** no existe paralelismo real en hardware (solo se ejecuta una instrucción por ciclo de reloj). Sin embargo, la máquina expendedora debe atender de forma concurrente tareas con frecuencias muy distintas: leer el joystick cada 80 ms, medir distancia cada 200 ms, parpadear el LED de arranque cada 1000 ms, consultar el DHT11 cada 1500 ms y actualizar la pantalla LCD y el PWM de manera fluida.
+El **ATmega328P** no tiene paralelismo real en hardware (solo ejecuta una instrucción por ciclo de reloj), pero la máquina expendedora necesita atender varias tareas con frecuencias muy distintas: leer el joystick cada 80 ms, medir la distancia cada 200 ms, hacer parpadear el LED de arranque cada 1000 ms, leer el DHT11 cada 1500 ms y refrescar tanto el LCD como el PWM sin tirones.
 
-* Se descarta `delay()` debido a que `delay()` ejecuta un bucle de espera activa consultando `micros()` sin liberar la CPU del microcontrolador. Usar `delay(1000)` en el arranque o `delay(5000)` al mostrar temperatura/humedad impediría atender eventos, degradaría la reactividad del sistema y podría provocar reinicios no deseados del Watchdog.
-* Se usa `ArduinoThread` en lugar de múltiples `if (millis() - prev >= T)` en `loop()` porque gestionar manualmente múltiples contadores temporales en el bucle principal genera código difícil de mantener y propenso a errores al escalar el número de periféricos.
-* Algunas ventajas de heredar de `Thread` y planificar con `ThreadController` son:
-  1. La encapsulación y reutilización de código ya que cada periférico hereda públicamente de `Thread` en su propio `.h` (`LedThread`, `UltrasonidosThread`, `DHTThread`, `JoystickThread`), sobrescribiendo `shouldRun()` y `run()` (llamando siempre al padre `Thread::run()`).
-  2. `controller.run()` comprueba en cada iteración del `loop()` qué hilos han cumplido su intervalo y ejecuta únicamente los que correspondan. Además, si un hilo se quedase bloqueado todo el programa se bloquearía lo cual refuerza la necesidad de usar Watchdog y de evitar bloqueos largos en los sensores.
-  3. Los hilos pueden activarse o desactivarse en ejecución. En el controlador, `led1Thread` se deshabilita (`led1Thread->enabled = false`) en cuanto concluyen los 3 parpadeos del Modo Arranque, y `led2Thread` permanece deshabilitado para no consumir CPU mientras se gobierna directamente mediante PWM o estado fijo.
+- **Por qué no usar `delay()`:** `delay()` se queda en un bucle de espera activa mirando `micros()` y bloquea por completo la CPU. Meter un `delay(1000)` en el arranque o un `delay(5000)` al enseñar la temperatura impediría detectar pulsaciones o cambios en los sensores, además de poder hacer saltar el Watchdog.
+- **Por qué `ArduinoThread` y no varios `if (millis() - prev >= T)` en `loop()`:** llevar muchos contadores manuales dentro del bucle principal acaba ensuciando el código y complica bastante añadir o modificar periféricos.
+- **Ventajas de heredar de `Thread` y usar `ThreadController`:**
+  1. Cada periférico tiene su propia clase heredada de `Thread` en su fichero `.h` (`LedThread`, `UltrasonidosThread`, `DHTThread`, `JoystickThread`), sobrescribiendo `shouldRun()` y `run()` (llamando siempre a `Thread::run()`). Esto deja el código bien separado y fácil de reutilizar.
+  2. En cada vuelta del `loop()`, `controller.run()` comprueba a qué hilos les toca ejecutarse y lanza solo esos. Como la planificación es cooperativa, si un hilo se queda colgado bloquea todo el programa; por eso es importante evitar esperas largas en los sensores y tener activo el Watchdog.
+  3. Los hilos se pueden activar o desactivar sobre la marcha. Por ejemplo, `led1Thread` se desactiva (`led1Thread->enabled = false`) en cuanto terminan los 3 parpadeos del arranque, y `led2Thread` se deja desactivado para no gastar CPU mientras se controla directamente por PWM o estado fijo.
 
-| Hilo (`Thread`) | Intervalo | Justificación de la periodicidad |
+| Hilo (`Thread`) | Intervalo | Motivo de la periodicidad |
 | :--- | :---: | :--- |
-| `LedThread` (`led1Thread`) | **1000 ms** | Cumple el intervalo exacto de 1 segundo de los 3 parpadeos del Modo Arranque, después se desactiva (`enabled = false`). |
-| `UltrasonidosThread` | **200 ms** | 5 lecturas por segundo ofrecen una buena detección de presencia (< 1 m) y actualización fluida en Modo Admin sin generar ecos acústicos cruzados (no se lanza una onda sin que haya vuelto la anterior). |
-| `DHTThread` | **1500 ms** | El DHT11 tiene una frecuencia máxima física cercana a 1 Hz, así que muestrearlo más rápido provocaría lecturas inválidas. |
-| `JoystickThread` | **80 ms** | 12.5 muestras por segundo que garantizan una navegación ágil en los menús sin sobrecargar el conversor ADC. |
+| `LedThread` (`led1Thread`) | **1000 ms** | Marca el intervalo de 1 segundo para los 3 parpadeos del Modo Arranque; al terminar se desactiva (`enabled = false`). |
+| `UltrasonidosThread` | **200 ms** | Con 5 lecturas por segundo se detecta bien si hay alguien a menos de 1 m y se actualiza rápido en Modo Admin, dejando tiempo de sobra para que vuelva el eco anterior. |
+| `DHTThread` | **1500 ms** | El DHT11 apenas llega a 1 Hz de frecuencia máxima; leerlo más rápido suele dar errores. |
+| `JoystickThread` | **80 ms** | 12.5 lecturas por segundo son suficientes para moverse con fluidez por los menús sin saturar el ADC. |
 
 ---
 
 ### 4.2. Interrupciones Hardware (`INT0`) y Software (`TimerOne`)
 
 #### Interrupciones frente a *polling*
-El *polling* desperdicia ciclos de CPU comprobando el pin del pulsador cuando no hay actividad, carece de prioridad y puede perder pulsaciones o medir mal los tiempos si coincide con la lectura de un sensor. Las interrupciones suspenden momentáneamente el flujo principal, salvan el contexto y el contador de programa, ejecutan la ISR desde la tabla de vectores y devuelven el control al punto exacto donde estaba el programa.
+Hacer *polling* gasta ciclos de CPU comprobando el pin del pulsador aunque nadie lo esté tocando, y además se pueden perder pulsaciones o medir mal el tiempo si justo coincide con la lectura de un sensor. Con interrupciones, el microcontrolador pausa un momento el programa principal, guarda el contexto, ejecuta la ISR correspondiente y vuelve justo donde estaba.
 
 #### Interrupción por Hardware (`INT0` en Pin 2, modo `CHANGE`)
-* Mientras se ejecuta una ISR en Arduino, las interrupciones globales están deshabilitadas, por lo que `millis()` no avanza y jamás debe usarse `delay()` dentro de ella. Por ello, `isrBotonExterno()` se limita a leer el tiempo actual, aplicar el anti-rebote, registrar la marca de tiempo de pulsación y levantar banderas `volatile`.
-* Se eliminan los rebotes (*debounce*) producidos al cerrar o abrir un interruptor mecánico debido a que los contactos oscilan durante varios milisegundos generando múltiples flancos falsos. Por tanto, se descarta cualquier transición producida a menos de `40 ms` de la anterior garantizando lecturas estables.
-* Solo se declaran `volatile` las variables compartidas entre las ISRs y el código principal (`contadorSegundos`, `tPresionBtnExt`, `tUltimoCambioISR`, `btnExtPresionado`, `flagCancelarServicio`, `flagToggleAdmin`) haciendo que se actualicen y guardando el valor entre ambas partes. Esta directiva obliga al compilador a leer siempre su valor desde la memoria RAM y no desde registros internos cacheados, evitando ralentizar el resto de variables donde no es necesaria. 
+- Mientras corre una ISR en Arduino las interrupciones globales están desactivadas, así que `millis()` no avanza y nunca se puede usar `delay()` dentro. Por eso `isrBotonExterno()` hace lo mínimo: lee el tiempo actual, aplica el anti-rebote, guarda cuándo se pulsó y activa las banderas `volatile`.
+- Al pulsar o soltar un botón mecánico los contactos rebotan durante unos milisegundos generando flancos falsos. Para evitarlo (*debounce*), se ignora cualquier cambio que ocurra a menos de `40 ms` del anterior.
+- Solo se marcan como `volatile` las variables compartidas entre las ISRs y el código principal (`contadorSegundos`, `tPresionBtnExt`, `tUltimoCambioISR`, `btnExtPresionado`, `flagCancelarServicio`, `flagToggleAdmin`). Así el compilador lee siempre su valor real desde RAM en vez de usar registros cacheados, sin penalizar el rendimiento del resto de variables.
 
 #### Interrupción por Software (`TimerOne`) y prevención de conflictos de Timers
-El ATmega328P tiene tres temporizadores hardware de los cuales solo se han utilizado 2 de ellos:
-* **`Timer0` (8 bits):** Gestiona `millis()`, `micros()`, `delay()` y el PWM a **980 Hz** de los **pines 5 y 6**. Al conectar **`LED2` al Pin 6**, su modulación PWM durante la preparación del café es totalmente segura junto a `millis()` y ajena a `TimerOne`.
-* **`Timer1` (16 bits):** Reservado en exclusiva para **`TimerOne`**, configurado con un periodo de $1\,000\,000\ \mu\text{s}$ ($1\text{ s}$) para ejecutar `isrTimer1Segundo()` e incrementar `contadorSegundos` con exactitud. Como `TimerOne` interfiere con el PWM de los **pines 9, 10 y 11**, esos pines se destinan únicamente a señales digitales estándar del bus de la pantalla LCD (nunca a `analogWrite()`).
+De los tres temporizadores hardware que tiene el ATmega328P se han usado dos:
+- **`Timer0` (8 bits):** se encarga de `millis()`, `micros()`, `delay()` y el PWM a **980 Hz** de los **pines 5 y 6**. Al poner **`LED2` en el Pin 6**, su brillo por PWM durante la preparación del café funciona sin chocar con `millis()` ni con `TimerOne`.
+- **`Timer1` (16 bits):** se reserva entero para **`TimerOne`**, configurado a $1\,000\,000\ \mu\text{s}$ ($1\text{ s}$) para lanzar `isrTimer1Segundo()` y sumar `contadorSegundos` con precisión. Como `TimerOne` pisa el PWM de los **pines 9, 10 y 11**, esos pines se usan solo como señales digitales para el LCD (nunca con `analogWrite()`).
 
 ---
 
 ### 4.3. Mecanismo de Seguridad: Watchdog Timer
 
-El **Watchdog Timer (WDT)** es un temporizador independiente integrado en la arquitectura del microcontrolador con su **propio oscilador interno de 128 kHz**, desacoplado del reloj principal de 16 MHz y de los timers. Si el programa no reinicia su cuenta mediante `wdt_reset()` antes de que venza el límite configurado, el Watchdog provoca un **reset físico automático del Arduino**.
+El **Watchdog Timer (WDT)** es un temporizador independiente integrado en el microcontrolador con su **propio oscilador interno de 128 kHz**, separado del reloj principal de 16 MHz y del resto de timers. Si el código no reinicia su cuenta con `wdt_reset()` antes de que pase el tiempo configurado, el Watchdog fuerza un **reset físico del Arduino**.
 
 #### Configuración en `WDTO_4S` (4 segundos)
-Al inicio de `setup()` se ejecuta `wdt_disable()` seguido de `wdt_enable(WDTO_4S)`, y en cada ciclo de `loop()` se invoca `wdt_reset()`.
-* En el peor caso operativo, cuando coinciden en la misma vuelta el timeout del HC-SR04 (25 ms), una lectura del DHT11 (~20–25 ms), el muestreo del joystick y un borrado/escritura del LCD (~2–5 ms), una iteración completa consume menos de **60 ms**.
-* Un umbral de **4 segundos** proporciona un margen holgado para descartar falsos reinicios durante el funcionamiento normal, pero asegura una recuperación rápida si el microcontrolador sufre un bloqueo real.
+Al principio de `setup()` se llama a `wdt_disable()` y luego a `wdt_enable(WDTO_4S)`, y en cada iteración de `loop()` se ejecuta `wdt_reset()`.
+- En el peor caso, si en la misma vuelta coinciden el timeout del HC-SR04 (25 ms), una lectura del DHT11 (~20–25 ms), el muestreo del joystick y una actualización del LCD (~2–5 ms), todo el ciclo tarda menos de **60 ms**.
+- Poner el límite en **4 segundos** da margen de sobra para que no haya reinicios falsos en uso normal, pero recupera la placa rápido si se produce un bloqueo real.
 
-#### Influencia del Watchdog:
+#### Influencia del Watchdog
 En cada iteración completa de `loop()` se garantiza que el conjunto `controller.run()` + `actualizarMaquinaExpendedora()` termine siempre por debajo de 4 segundos y llegue a `wdt_reset()`. Además, al ser `ArduinoThread` cooperativo, si el `run()` de cualquiera de los hilos de periféricos (`UltrasonidosThread`, `DHTThread`, `JoystickThread`, `LedThread`) se quedara colgado, `controller.run()` nunca devolvería el control al `loop()` y el Watchdog resetearía la placa automáticamente. En el tramo de `setup()` posterior a `wdt_enable(WDTO_4S)`, si la inicialización de algún periférico (`lcd.begin()`, `dht.begin()`, etc.) bloqueara el arranque más de 4 segundos, el Watchdog forzaría un nuevo intento de arranque. Lo mismo ocurriría si el procesador quedase atrapado en una ISR o con las interrupciones globales deshabilitadas (`noInterrupts()`), ya que el Watchdog opera por hardware de forma independiente y resetearía el sistema al cumplirse los 4 segundos.
 
-#### NO influencia del Watchdog:
-El Watchdog supervisa *disponibilidad temporal* (que el flujo no esté congelado), pero **no puede detectar**:
-* Si un error de programación impidiera salir de un estado (por ejemplo, una condición mal escrita en `SERV_ESPERA`), el `loop()` seguiría ejecutándose con normalidad y refrescando `wdt_reset()` miles de veces por segundo, por lo que el Watchdog consideraría el sistema sano.
-* Si se suelta el cable del DHT11 (`readTemperature()` retorna `NaN`) o el del HC-SR04 (`pulseIn()` agota su timeout de 25 ms y retorna `0`), el hilo termina en milisegundos, el `loop()` llega a `wdt_reset()` y el Watchdog no interviene.
-* En el arranque previo a la activación del WDT, el temporizador no está vigilando.
-* Un LED fundido, un mal contraste en `V0` del LCD o un precio mal configurado no detienen la CPU y quedan fuera del alcance del Watchdog, es decir, fallos físicos en actuadores o datos mal configurados.
+#### Casos donde NO influye el Watchdog
+El Watchdog solo vigila que el programa no se quede congelado, pero **no puede detectar**:
+- Errores de lógica que no bloqueen el bucle: si una condición mal escrita impidiera salir de un estado (por ejemplo, quedarse atascado en `SERV_ESPERA`), `loop()` seguiría dando vueltas y llamando a `wdt_reset()`, así que para el Watchdog todo iría bien.
+- Sensores desconectados que devuelven error rápido: si se suelta el DHT11 (`readTemperature()` devuelve `NaN`) o el HC-SR04 (`pulseIn()` agota los 25 ms y devuelve `0`), el hilo acaba enseguida y se sigue refrescando `wdt_reset()`.
+- Cualquier problema antes de ejecutar `wdt_enable(WDTO_4S)` durante el arranque o el bootloader.
+- Fallos físicos en actuadores o datos erróneos (un LED fundido, el contraste `V0` del LCD mal ajustado o un precio mal puesto), ya que no detienen la CPU.
 
-#### Partes del código donde podría entrar en acción el Watchdog:
-Analizando el código, los puntos críticos donde un fallo eléctrico, de bus o de software podría congelar la CPU y disparar el Watchdog son:
-1. **`UltrasonidosThread.h` → `pulseIn(pinEcho, HIGH, 25000)`:** debido a que es una llamada intrínsecamente bloqueante a la espera del eco. Aunque en el código se ha acotado con un timeout de `25000 us` para evitar bloqueos prolongados, cualquier fallo grave del pin `ECHO` sin timeout o bucles de reintento mal controlados detendrían aquí el flujo principal hasta disparar el Watchdog.
-2. **`DHTThread.h` → `dht.readTemperature()` / `dht.readHumidity()`:** ya que la librería de Adafruit lee la trama de 40 bits mediante bucles `while` cronometrados en microsegundos con secciones críticas donde desactiva interrupciones. Un fallo eléctrico en la línea de datos `PIN_DHT` que impidiera salir de esas esperas de sincronización haría que el Watchdog reiniciase la placa a los 4 segundos.
-3. **`Interrupciones.h` (`isrBotonExterno`):** si el Pin 2 disparase `INT0` de manera continuada, la CPU no lograría volver al `loop()` para ejecutar `wdt_reset()`, activándose el reinicio de seguridad.
-4. **Bloqueo en `MaquinaEstados.h`:** si alguna modificación introdujese un bucle de espera bloqueante que nunca cumpliese su condición de salida, transcurridos 4 segundos exactos el Watchdog reiniciaría el microcontrolador y devolvería la máquina al **Modo Arranque**.
+#### Puntos del código donde podría saltar el Watchdog
+Revisando el proyecto, los sitios donde un fallo eléctrico o de software podría congelar la CPU y activar el Watchdog son:
+1. **`UltrasonidosThread.h` (`pulseIn(pinEcho, HIGH, 25000)`):** es una función bloqueante que espera la llegada del eco. Aunque está limitada a `25000 us` para no colgar el programa, un fallo grave en `ECHO` sin timeout o un bucle de reintentos mal planteado detendría la ejecución hasta que saltase el Watchdog.
+2. **`DHTThread.h` (`dht.readTemperature()` / `dht.readHumidity()`):** la librería de Adafruit lee la trama de 40 bits con bucles `while` cronometrados en microsegundos y con las interrupciones desactivadas. Un fallo eléctrico en `PIN_DHT` que impidiera salir de esa espera provocaría el reset a los 4 segundos.
+3. **`Interrupciones.h` (`isrBotonExterno`):** si un mal contacto o ruido en el Pin 2 disparase `INT0` sin parar, la CPU no podría volver al `loop()` para hacer `wdt_reset()`.
+4. **Bloqueo en `MaquinaEstados.h`:** si en algún cambio futuro se metiera un bucle de espera (`while`) del que nunca se saliera, a los 4 segundos el Watchdog reiniciaría la placa y la devolvería al **Modo Arranque**.
 
 ---
 
 ## 5. Funcionamiento de los Modos de Operación
 
-#### 1. Modo Arranque (`MODO_ARRANQUE`)
-* Al energizar o reiniciar la placa Arduino UNO, la pantalla LCD muestra el mensaje **`CARGANDO ...`**.
-* De forma simultánea, el hilo `led1Thread` (configurado con un intervalo de `1000 ms`) conmuta automáticamente el estado de `LED1` sin bloquear el programa.
-* Cuando `led1Thread->cambiosRealizados` alcanza `6` conmutaciones (`ON-OFF-ON-OFF-ON-OFF`), se completan exactamente los **3 parpadeos en intervalos de 1 segundo**.
-* En ese instante, se invoca `entrarModoServicio()`, que deshabilita el hilo de parpadeo (`led1Thread->enabled = false`) para liberar recursos de CPU, apaga por completo `LED1` y pasa automáticamente al Modo Servicio.
+### 1. Modo Arranque (`MODO_ARRANQUE`)
+Al encender o reiniciar el Arduino, el LCD muestra **`CARGANDO ...`** mientras `led1Thread` (configurado cada `1000 ms`) va cambiando el estado de `LED1` sin bloquear el resto del programa. Cuando `led1Thread->cambiosRealizados` llega a `6` (`ON-OFF-ON-OFF-ON-OFF`), se han completado los **3 parpadeos de 1 segundo**. En ese momento se llama a `entrarModoServicio()`, que desactiva el hilo (`led1Thread->enabled = false`) para ahorrar CPU, apaga `LED1` y pasa al Modo Servicio.
 
-#### 2. Modo Servicio (`MODO_SERVICIO`)
-Constituye el estado principal de atención al cliente y se divide en cinco subestados no bloqueantes gestionados mediante `millis()`:
+### 2. Modo Servicio (`MODO_SERVICIO`)
+Es el modo normal de uso de la máquina y está dividido en cinco subestados controlados con `millis()`:
 
-* **a. Detección de presencia (`SERV_ESPERA`):**
-  * Mientras la distancia medida en segundo plano por `usThread` sea igual o superior a 1 metro (`usThread->distanciaCm >= 100.0`), el LCD permanece mostrando **`ESPERANDO CLIENTE`**.
-  * En cuanto algo se sitúa a menos de 1 metro (`< 100.0 cm`), se guarda la marca temporal `tInicioFase = millis()` y el sistema transiciona de inmediato a la fase de interacción.
+- **Detección de presencia (`SERV_ESPERA`):** mientras la distancia leída por `usThread` sea mayor o igual a 1 metro (`usThread->distanciaCm >= 100.0`), el LCD muestra **`ESPERANDO CLIENTE`**. En cuanto detecta algo a menos de 1 metro (`< 100.0 cm`), guarda `tInicioFase = millis()` y pasa al siguiente estado.
+- **Lectura del entorno (`SERV_ENTORNO`):** el LCD muestra la temperatura (`°C`) y la humedad (`%`) medidas por `dhtThread`, actualizándose cada segundo durante **5 segundos** (`millis() - tInicioFase >= 5000`).
+- **Catálogo y selección (`SERV_CATALOGO`):** pasados los 5 segundos, aparecen las 5 bebidas definidas en `Catalogo.h` con su precio a dos decimales:
+  - `Café Solo`: **1.00 €**
+  - `Café Cortado`: **1.10 €**
+  - `Café Doble`: **1.25 €**
+  - `Café Premium`: **1.50 €**
+  - `Chocolate`: **2.00 €**
+  Se recorre la lista de forma circular moviendo el joystick arriba o abajo (`JOY_UP` / `JOY_DOWN`) y se elige pulsando el botón integrado (`JOY_CLICK`).
+- **Preparación (`SERV_PREPARANDO`):** al confirmar la bebida se sortea un tiempo aleatorio entre **4 y 8 segundos** con `tPreparacion = random(4000, 8001)` (usando `randomSeed(analogRead(PIN_SEED))` en `setup()`). El LCD muestra **`Preparando Cafe...`** y, en cada vuelta del bucle, se calcula el tiempo transcurrido (`transcurrido = millis() - tInicioFase`) para mapearlo al rango PWM de 8 bits con `map(transcurrido, 0, tPreparacion, 0, 255)`, subiendo el brillo de `LED2` (Pin 6, Timer0) del 0% al 100%.
+- **Retirada (`SERV_RETIRE`):** al terminar `tPreparacion`, se apaga `LED2` y el LCD enseña **`RETIRE BEBIDA`** durante **3 segundos** (`3000 ms`), volviendo después a `SERV_ESPERA`.
+- **Cancelación (Botón externo 2–3 s):** en cualquier punto entre `SERV_ENTORNO` y `SERV_RETIRE`, mantener pulsado el botón externo entre **2 y 3 segundos** activa `flagCancelarServicio` desde la interrupción `INT0`. El programa corta la operación actual, apaga `LED2` y vuelve a `SERV_ESPERA` sin reiniciar físicamente la placa.
 
-* **b. Monitorización de entorno (`SERV_ENTORNO`):**
-  * Al detectar presencia, el LCD presenta la temperatura (`°C`) y la humedad (`%`) obtenidas por `dhtThread`, refrescando los valores cada segundo durante **5 segundos** (`millis() - tInicioFase >= 5000`).
+### 3. Modo Administración (`MODO_ADMIN`)
+Sirve para consultar los sensores y modificar los precios de las bebidas sin tocar el código:
 
-* **c. Catálogo de productos y selección (`SERV_CATALOGO`):**
-  * Transcurridos los 5 segundos, se muestra el catálogo de 5 bebidas definido en `Catalogo.h` junto con su precio actualizado con dos decimales:
-    * `Café Solo`: **1.00 €**
-    * `Café Cortado`: **1.10 €**
-    * `Café Doble`: **1.25 €**
-    * `Café Premium`: **1.50 €**
-    * `Chocolate`: **2.00 €**
-  * La navegación entre productos se realiza desplazando el joystick hacia arriba (`JOY_UP`) o hacia abajo (`JOY_DOWN`) donde se puede pasar del primero al último y viceversa, y la selección se confirma pulsando el botón integrado del joystick (`JOY_CLICK`).
-
-* **d. Preparación de la bebida (`SERV_PREPARANDO`):**
-  * Al confirmar el producto, se genera una duración pseudoaleatoria diferente en cada servicio entre **4 y 8 segundos** mediante `tPreparacion = random(4000, 8001)` (inicializado con `randomSeed(analogRead(PIN_SEED))` en `setup()`).
-  * El LCD muestra **`Preparando Cafe...`** mientras se calcula en cada ciclo el porcentaje de avance (`transcurrido = millis() - tInicioFase`) y se traduce linealmente al rango PWM de 8 bits con `map(transcurrido, 0, tPreparacion, 0, 255)`, aumentando de forma progresiva el brillo de `LED2` (Pin 6, Timer0) del 0% al 100%.
-
-* **e. Retirada de bebida (`SERV_RETIRE`):**
-  * Al concluir `tPreparacion`, se apaga por completo `LED2` y el LCD muestra **`RETIRE BEBIDA`** durante **3 segundos** (`3000 ms`), tras los cuales el sistema retorna automáticamente al reposo (`SERV_ESPERA`).
-
-* **f. Cancelación y reinicio de estado (Botón externo 2–3 s):**
-  * En cualquier instante durante la interacción con el cliente (desde `SERV_ENTORNO` hasta `SERV_RETIRE`), mantener presionado el botón externo entre **2 y 3 segundos** activa la bandera `flagCancelarServicio` desde la interrupción hardware `INT0`.
-  * El controlador aborta de inmediato la operación en curso, apaga el PWM de `LED2` y reinicia el estado interno de vuelta a `SERV_ESPERA` sin reiniciar físicamente la placa Arduino.
-
-#### 3. Modo Administración (`MODO_ADMIN`)
-Permite la supervisión técnica en tiempo real y el ajuste dinámico de precios:
-
-* **a. Acceso y salida (Botón externo ≥ 5 s):**
-  * Es accesible desde cualquier modo manteniendo pulsado el botón externo durante **al menos 5 segundos consecutivos** (`>= 5000 ms`). Gracias a `verificarPulsacionLargaAdmin()`, la conmutación ocurre en el instante exacto en que se cumplen los 5 segundos.
-  * Para abandonar la consola de administración y regresar al Modo Servicio se repite la misma pulsación continua de ≥ 5 segundos.
-
-* **b. Indicadores de estado:**
-  * Al entrar en `MODO_ADMIN` mediante `entrarModoAdmin()`, ambos indicadores luminosos (`LED1` y `LED2`) quedan encendidos de forma fija (`HIGH`) durante todo el tiempo que se esté en este modo.
-
-* **c. Menú de administración y navegación (`ADM_MENU`):**
-  * El LCD despliega las 4 opciones (`a.Ver temp`, `b.Ver distancia`, `c.Ver contador`, `d.Modif precios`), navegables con el joystick arriba/abajo y seleccionables mediante su pulsador (`JOY_CLICK`).
-  * Desplazar el joystick hacia la izquierda (`JOY_LEFT`) permite retroceder un nivel desde cualquier vista o submenú:
-    1. **Ver temperatura (`ADM_TEMP`):** Muestra dinámicamente en tiempo real las lecturas del DHT11 (`Temp: XX C` y `Hum: YY %`), refrescando la pantalla cada `500 ms`.
-    2. **Ver distancia sensor (`ADM_DIST`):** Muestra la distancia actual en centímetros medida por el HC-SR04 (`Distancia: XX cm`), refrescada dinámicamente cada `250 ms`.
-    3. **Ver contador (`ADM_CONT`):** Muestra el tiempo en segundos transcurrido desde el encendido de la placa (`contadorSegundos`), actualizándose exactamente segundo a segundo gracias a la interrupción software de `Timer1`.
-    4. **Modificar precios (`ADM_SEL_PRECIO` → `ADM_EDIT_PRECIO`):** Presenta la lista de productos para seleccionar el deseado. Al pulsar el botón del joystick se carga su importe en una copia temporal `precioTemp`, que puede incrementarse o decrementarse en tramos de **5 céntimos (`0.05 €`)** moviendo el joystick arriba o abajo. Pulsar el botón confirma y guarda el nuevo importe en `catalogo[indiceProd].precio` (reflejándose de inmediato al volver al Modo Servicio, sin necesidad de EEPROM), mientras que mover el joystick a la izquierda descarta los cambios y regresa al listado.
-
+- **Acceso y salida (Botón externo ≥ 5 s):** se puede entrar desde cualquier modo manteniendo el botón externo pulsado al menos **5 segundos seguidos** (`>= 5000 ms`). Con `verificarPulsacionLargaAdmin()`, el cambio salta justo al cumplirse los 5 segundos. Para salir y volver al Modo Servicio se hace exactamente la misma pulsación.
+- **Indicadores:** al entrar mediante `entrarModoAdmin()`, tanto `LED1` como `LED2` se quedan encendidos fijos (`HIGH`) mientras se esté dentro de este modo.
+- **Menú (`ADM_MENU`):** el LCD muestra las 4 opciones (`a.Ver temp`, `b.Ver distancia`, `c.Ver contador`, `d.Modif precios`), que se recorren con arriba/abajo y se abren con `JOY_CLICK`. Mover el joystick a la izquierda (`JOY_LEFT`) vuelve atrás desde cualquier pantalla:
+  1. **Ver temperatura (`ADM_TEMP`):** muestra las lecturas del DHT11 (`Temp: XX C` y `Hum: YY %`), refrescando cada `500 ms`.
+  2. **Ver distancia (`ADM_DIST`):** enseña la distancia actual del HC-SR04 (`Distancia: XX cm`), refrescando cada `250 ms`.
+  3. **Ver contador (`ADM_CONT`):** muestra los segundos transcurridos desde que se encendió el Arduino (`contadorSegundos`), actualizados cada segundo por `Timer1`.
+  4. **Modificar precios (`ADM_SEL_PRECIO` → `ADM_EDIT_PRECIO`):** deja elegir un producto de la lista y, al pulsar el botón del joystick, copia su precio en `precioTemp`. Moviendo arriba o abajo se sube o baja en pasos de **5 céntimos (`0.05 €`)**. Al pulsar el botón se guarda el cambio en `catalogo[indiceProd].precio` (se aplica al instante al volver al Modo Servicio, sin usar EEPROM), mientras que mover a la izquierda descarta los cambios y vuelve a la lista.
 ---
 
 ## 6. Conclusiones
