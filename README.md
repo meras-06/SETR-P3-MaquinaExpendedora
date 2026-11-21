@@ -8,9 +8,9 @@
 
 ## 1. Introducción y Objetivo
 
-En esta práctica se ha diseñado e implementado el sistema hardware y el firmware de control en tiempo real para una **máquina expendedora automática** basada en **Arduino UNO (ATmega328P)**.
+En esta práctica se ha diseñado y montado el hardware y el software de control para una máquina expendedora basada en Arduino UNO (ATmega328P).
 
-El controlador gestiona de forma concurrente y no bloqueante la interacción con el usuario (pantalla LCD 16x2, joystick analógico con pulsador, botón externo y dos indicadores LED) junto con la monitorización ambiental (sensor de temperatura y humedad DHT11) y de proximidad (sensor ultrasónico HC-SR04), estructurando su comportamiento en tres modos de operación: **Arranque**, **Servicio** y **Administración**.
+El sistema gestiona al mismo tiempo la interfaz de usuario (pantalla LCD, joystick con botón, pulsador externo y dos LEDs) y la lectura de los sensores de temperatura/humedad (DHT11) y distancia (HC-SR04), evitando bloqueos en la ejecución. Todo el funcionamiento se organiza en tres modos: Arranque, Servicio y Administración.
 
 ---
 
@@ -81,12 +81,12 @@ Practica3/
 
 En un microcontrolador como el **ATmega328P** no existe paralelismo real en hardware (solo se ejecuta una instrucción por ciclo de reloj). Sin embargo, la máquina expendedora debe atender de forma concurrente tareas con frecuencias muy distintas: leer el joystick cada 80 ms, medir distancia cada 200 ms, parpadear el LED de arranque cada 1000 ms, consultar el DHT11 cada 1500 ms y actualizar la pantalla LCD y el PWM de manera fluida.
 
-* **Descarte de `delay()`:** Internamente, `delay()` ejecuta un bucle de espera activa consultando `micros()` sin liberar la CPU del microcontrolador. Usar `delay(1000)` en el arranque o `delay(5000)` al mostrar temperatura/humedad impediría atender eventos, degradaría la reactividad del sistema y podría provocar reinicios no deseados del Watchdog.
-* **Uso de `ArduinoThread` en lugar de múltiples `if (millis() - prev >= T)` en `loop()`:** Gestionar manualmente múltiples contadores temporales en el bucle principal genera código difícil de mantener y propenso a errores al escalar el número de periféricos.
-* **Ventajas de heredar de `Thread` y planificar con `ThreadController`:**
-  1. **Encapsulación y reutilización:** Cada periférico hereda públicamente de `Thread` en su propio `.h` (`LedThread`, `UltrasonidosThread`, `DHTThread`, `JoystickThread`), sobrescribiendo `shouldRun()` y `run()` (llamando siempre al padre `Thread::run()`).
-  2. **Planificación cooperativa y bucle limpio:** `controller.run()` comprueba en cada iteración del `loop()` qué hilos han cumplido su intervalo y ejecuta únicamente los que correspondan. Al ser cooperativa, **si un hilo se quedase bloqueado, todo el programa se bloquearía**, lo cual refuerza la necesidad del Watchdog y de evitar bloqueos largos en los sensores.
-  3. **Ahorro dinámico de recursos (`enabled`):** Los hilos pueden activarse o desactivarse en ejecución. En el controlador, `led1Thread` se deshabilita (`led1Thread->enabled = false`) en cuanto concluyen los 3 parpadeos del Modo Arranque, y `led2Thread` permanece deshabilitado para no consumir CPU mientras se gobierna directamente mediante PWM o estado fijo.
+* Se descarta `delay()` debido a que `delay()` ejecuta un bucle de espera activa consultando `micros()` sin liberar la CPU del microcontrolador. Usar `delay(1000)` en el arranque o `delay(5000)` al mostrar temperatura/humedad impediría atender eventos, degradaría la reactividad del sistema y podría provocar reinicios no deseados del Watchdog.
+* Se usa `ArduinoThread` en lugar de múltiples `if (millis() - prev >= T)` en `loop()` porque gestionar manualmente múltiples contadores temporales en el bucle principal genera código difícil de mantener y propenso a errores al escalar el número de periféricos.
+* Algunas ventajas de heredar de `Thread` y planificar con `ThreadController` son:
+  1. La encapsulación y reutilización de código ya que cada periférico hereda públicamente de `Thread` en su propio `.h` (`LedThread`, `UltrasonidosThread`, `DHTThread`, `JoystickThread`), sobrescribiendo `shouldRun()` y `run()` (llamando siempre al padre `Thread::run()`).
+  2. `controller.run()` comprueba en cada iteración del `loop()` qué hilos han cumplido su intervalo y ejecuta únicamente los que correspondan. Además, si un hilo se quedase bloqueado todo el programa se bloquearía lo cual refuerza la necesidad de usar Watchdog y de evitar bloqueos largos en los sensores.
+  3. Los hilos pueden activarse o desactivarse en ejecución. En el controlador, `led1Thread` se deshabilita (`led1Thread->enabled = false`) en cuanto concluyen los 3 parpadeos del Modo Arranque, y `led2Thread` permanece deshabilitado para no consumir CPU mientras se gobierna directamente mediante PWM o estado fijo.
 
 | Hilo (`Thread`) | Intervalo | Justificación de la periodicidad |
 | :--- | :---: | :--- |
@@ -103,14 +103,14 @@ En un microcontrolador como el **ATmega328P** no existe paralelismo real en hard
 El *polling* desperdicia ciclos de CPU comprobando el pin del pulsador cuando no hay actividad, carece de prioridad y puede perder pulsaciones o medir mal los tiempos si coincide con la lectura de un sensor. Las interrupciones suspenden momentáneamente el flujo principal, salvan el contexto y el contador de programa, ejecutan la ISR desde la tabla de vectores y devuelven el control al punto exacto donde estaba el programa.
 
 #### Interrupción por Hardware (`INT0` en Pin 2, modo `CHANGE`)
-* **Diseño de la ISR:** Mientras se ejecuta una ISR en Arduino, las interrupciones globales están deshabilitadas, por lo que `millis()` no avanza y jamás debe usarse `delay()` dentro de ella. Por ello, `isrBotonExterno()` se limita a leer el tiempo actual, aplicar el anti-rebote, registrar la marca de tiempo de pulsación y levantar banderas `volatile`.
-* **Eliminación de rebotes (*debounce*):** Al cerrar o abrir un interruptor mecánico, los contactos oscilan durante varios milisegundos generando múltiples flancos falsos. Descartar cualquier transición producida a menos de `40 ms` de la anterior garantiza lecturas estables.
-* **Uso estricto de `volatile`:** Solo se declaran `volatile` las variables compartidas entre las ISRs y el código principal (`contadorSegundos`, `tPresionBtnExt`, `tUltimoCambioISR`, `btnExtPresionado`, `flagCancelarServicio`, `flagToggleAdmin`) haciendo que se actualicen y guardando el valor entre ambas partes. Esta directiva obliga al compilador a leer siempre su valor desde la memoria RAM y no desde registros internos cacheados, evitando ralentizar el resto de variables donde no es necesaria. 
+* Mientras se ejecuta una ISR en Arduino, las interrupciones globales están deshabilitadas, por lo que `millis()` no avanza y jamás debe usarse `delay()` dentro de ella. Por ello, `isrBotonExterno()` se limita a leer el tiempo actual, aplicar el anti-rebote, registrar la marca de tiempo de pulsación y levantar banderas `volatile`.
+* Se eliminan los rebotes (*debounce*) producidos al cerrar o abrir un interruptor mecánico debido a que los contactos oscilan durante varios milisegundos generando múltiples flancos falsos. Por tanto, se descarta cualquier transición producida a menos de `40 ms` de la anterior garantizando lecturas estables.
+* Solo se declaran `volatile` las variables compartidas entre las ISRs y el código principal (`contadorSegundos`, `tPresionBtnExt`, `tUltimoCambioISR`, `btnExtPresionado`, `flagCancelarServicio`, `flagToggleAdmin`) haciendo que se actualicen y guardando el valor entre ambas partes. Esta directiva obliga al compilador a leer siempre su valor desde la memoria RAM y no desde registros internos cacheados, evitando ralentizar el resto de variables donde no es necesaria. 
 
 #### Interrupción por Software (`TimerOne`) y prevención de conflictos de Timers
 El ATmega328P tiene tres temporizadores hardware de los cuales solo se han utilizado 2 de ellos:
-1. **`Timer0` (8 bits):** Gestiona `millis()`, `micros()`, `delay()` y el PWM a **980 Hz** de los **pines 5 y 6**. Al conectar **`LED2` al Pin 6**, su modulación PWM durante la preparación del café es totalmente segura junto a `millis()` y ajena a `TimerOne`.
-2. **`Timer1` (16 bits):** Reservado en exclusiva para **`TimerOne`**, configurado con un periodo de $1\,000\,000\ \mu\text{s}$ ($1\text{ s}$) para ejecutar `isrTimer1Segundo()` e incrementar `contadorSegundos` con exactitud. Como `TimerOne` interfiere con el PWM de los **pines 9, 10 y 11**, esos pines se destinan únicamente a señales digitales estándar del bus de la pantalla LCD (nunca a `analogWrite()`).
+* **`Timer0` (8 bits):** Gestiona `millis()`, `micros()`, `delay()` y el PWM a **980 Hz** de los **pines 5 y 6**. Al conectar **`LED2` al Pin 6**, su modulación PWM durante la preparación del café es totalmente segura junto a `millis()` y ajena a `TimerOne`.
+* **`Timer1` (16 bits):** Reservado en exclusiva para **`TimerOne`**, configurado con un periodo de $1\,000\,000\ \mu\text{s}$ ($1\text{ s}$) para ejecutar `isrTimer1Segundo()` e incrementar `contadorSegundos` con exactitud. Como `TimerOne` interfiere con el PWM de los **pines 9, 10 y 11**, esos pines se destinan únicamente a señales digitales estándar del bus de la pantalla LCD (nunca a `analogWrite()`).
 
 ---
 
@@ -124,25 +124,21 @@ Al inicio de `setup()` se ejecuta `wdt_disable()` seguido de `wdt_enable(WDTO_4S
 * Un umbral de **4 segundos** proporciona un margen holgado para descartar falsos reinicios durante el funcionamiento normal, pero asegura una recuperación rápida si el microcontrolador sufre un bloqueo real.
 
 #### Influencia del Watchdog:
-1. **En cada iteración completa de `loop()`:** Garantiza que el conjunto `controller.run()` + `actualizarMaquinaExpendedora()` termine siempre por debajo de 4 segundos y llegue a `wdt_reset()`.
-2. **En todos los hilos de sensores (`UltrasonidosThread`, `DHTThread`, `JoystickThread`, `LedThread`):** Dado que `ArduinoThread` es cooperativo, si cualquier `run()` se quedara colgado, `controller.run()` nunca devolvería el control al `loop()` y el Watchdog resetearía la placa automáticamente.
-3. **En el tramo de `setup()` posterior a `wdt_enable(WDTO_4S)`:** Si la inicialización de algún periférico (`lcd.begin()`, `dht.begin()`, etc.) bloqueara el arranque más de 4 segundos, el Watchdog forzaría un nuevo intento de arranque.
-4. **En bloqueos dentro de ISRs o tormentas de interrupciones:** Incluso si el procesador quedase atrapado en una ISR o con las interrupciones globales deshabilitadas (`noInterrupts()`), el Watchdog opera por hardware de forma independiente y resetearía el sistema al cumplirse los 4 segundos.
-5. **Ante corrupción del flujo de ejecución por interferencias eléctricas o desbordamiento de pila:** Si el Contador de Programa saltase a una zona inválida de memoria y dejase de ejecutar el `loop()`, el oscilador de 128 kHz recuperaría la placa.
+En cada iteración completa de `loop()` se garantiza que el conjunto `controller.run()` + `actualizarMaquinaExpendedora()` termine siempre por debajo de 4 segundos y llegue a `wdt_reset()`. Además, en todos los threads de sensores (`UltrasonidosThread`, `DHTThread`, `JoystickThread`, `LedThread`) también debido a que `ArduinoThread` es cooperativo, si cualquier `run()` se quedara colgado, `controller.run()` nunca devolvería el control al `loop()` y el Watchdog resetearía la placa automáticamente. En el tramo de `setup()` posterior a `wdt_enable(WDTO_4S)`, si la inicialización de algún periférico (`lcd.begin()`, `dht.begin()`, etc.) bloqueara el arranque más de 4 segundos, el Watchdog forzaría un nuevo intento de arranque. También si el procesador quedase atrapado en una ISR o con las interrupciones globales deshabilitadas (`noInterrupts()`), el Watchdog opera por hardware de forma independiente y resetearía el sistema al cumplirse los 4 segundos.
 
-#### NO influencia del Whatchdog:
+#### NO influencia del Watchdog:
 El Watchdog supervisa *disponibilidad temporal* (que el flujo no esté congelado), pero **no puede detectar**:
-1. **Errores lógicos no bloqueantes en `MaquinaEstados.h`:** Si un error de programación impidiera salir de un estado (por ejemplo, una condición mal escrita en `SERV_ESPERA`), el `loop()` seguiría ejecutándose con normalidad y refrescando `wdt_reset()` miles de veces por segundo, por lo que el Watchdog consideraría el sistema sano.
-2. **Sensores desconectados que fallan devolviendo error sin bloquearse:** Si se suelta el cable del DHT11 (`readTemperature()` retorna `NaN`) o el del HC-SR04 (`pulseIn()` agota su timeout de 25 ms y retorna `0`), el hilo termina en milisegundos, el `loop()` llega a `wdt_reset()` y el Watchdog no interviene.
-3. **Durante el Bootloader (gestor de arranque) y antes de `wdt_enable(WDTO_4S)`:** En el arranque previo a la activación del WDT, el temporizador no está vigilando.
-4. **Fallos puramente físicos en actuadores o datos en RAM:** Un LED fundido, un mal contraste en `V0` del LCD o un precio mal configurado no detienen la CPU y quedan fuera del alcance del Watchdog.
+* Si un error de programación impidiera salir de un estado (por ejemplo, una condición mal escrita en `SERV_ESPERA`), el `loop()` seguiría ejecutándose con normalidad y refrescando `wdt_reset()` miles de veces por segundo, por lo que el Watchdog consideraría el sistema sano.
+* Si se suelta el cable del DHT11 (`readTemperature()` retorna `NaN`) o el del HC-SR04 (`pulseIn()` agota su timeout de 25 ms y retorna `0`), el hilo termina en milisegundos, el `loop()` llega a `wdt_reset()` y el Watchdog no interviene.
+* En el arranque previo a la activación del WDT, el temporizador no está vigilando.
+* Un LED fundido, un mal contraste en `V0` del LCD o un precio mal configurado no detienen la CPU y quedan fuera del alcance del Watchdog, es decir, fallos físicos en actuadores o datos mal configurados.
 
 #### Partes del código donde podría entrar en acción el Watchdog:
 Analizando el código, los puntos críticos donde un fallo eléctrico, de bus o de software podría congelar la CPU y disparar el Watchdog son:
-1. **`UltrasonidosThread.h` → `pulseIn(pinEcho, HIGH, 25000)`:** Es una llamada intrínsecamente bloqueante a la espera del eco. Aunque en el código se ha acotado con un timeout de `25000 us` para evitar bloqueos prolongados, cualquier fallo grave del pin `ECHO` sin timeout o bucles de reintento mal controlados detendrían aquí el flujo principal hasta disparar el Watchdog.
-2. **`DHTThread.h` → `dht.readTemperature()` / `dht.readHumidity()`:** La librería de Adafruit lee la trama de 40 bits mediante bucles `while` cronometrados en microsegundos con secciones críticas donde desactiva interrupciones. Un fallo eléctrico en la línea de datos `PIN_DHT` que impidiera salir de esas esperas de sincronización haría que el Watchdog reiniciase la placa a los 4 segundos.
-3. **Tormenta de interrupciones en `Interrupciones.h` (`isrBotonExterno`):** Si un cortocircuito intermitente o ruido eléctrico de alta frecuencia en el Pin 2 disparase `INT0` de manera continuada, la CPU no lograría volver al `loop()` para ejecutar `wdt_reset()`, activándose el reinicio de seguridad.
-4. **Bloqueo accidental en `MaquinaEstados.h`:** Si alguna modificación futura introdujese un bucle de espera bloqueante (`while(...)`) que nunca cumpliese su condición de salida, transcurridos 4 segundos exactos el Watchdog reiniciaría el ATmega328P y devolvería la máquina al **Modo Arranque**.
+1. **`UltrasonidosThread.h` → `pulseIn(pinEcho, HIGH, 25000)`:** debido a que es una llamada intrínsecamente bloqueante a la espera del eco. Aunque en el código se ha acotado con un timeout de `25000 us` para evitar bloqueos prolongados, cualquier fallo grave del pin `ECHO` sin timeout o bucles de reintento mal controlados detendrían aquí el flujo principal hasta disparar el Watchdog.
+2. **`DHTThread.h` → `dht.readTemperature()` / `dht.readHumidity()`:** ya que la librería de Adafruit lee la trama de 40 bits mediante bucles `while` cronometrados en microsegundos con secciones críticas donde desactiva interrupciones. Un fallo eléctrico en la línea de datos `PIN_DHT` que impidiera salir de esas esperas de sincronización haría que el Watchdog reiniciase la placa a los 4 segundos.
+3. ** `Interrupciones.h` (`isrBotonExterno`):** si el Pin 2 disparase `INT0` de manera continuada, la CPU no lograría volver al `loop()` para ejecutar `wdt_reset()`, activándose el reinicio de seguridad.
+4. **Bloqueo en `MaquinaEstados.h`:** si alguna modificación introdujese un bucle de espera bloqueante que nunca cumpliese su condición de salida, transcurridos 4 segundos exactos el Watchdog reiniciaría el microcontrolador y devolvería la máquina al **Modo Arranque**.
 
 ---
 
@@ -166,11 +162,11 @@ Constituye el estado principal de atención al cliente y se divide en cinco sube
 
 * **c. Catálogo de productos y selección (`SERV_CATALOGO`):**
   * Transcurridos los 5 segundos, se muestra el catálogo de 5 bebidas definido en `Catalogo.h` junto con su precio actualizado con dos decimales:
-    * `Café Solo` — **1.00 €**
-    * `Café Cortado` — **1.10 €**
-    * `Café Doble` — **1.25 €**
-    * `Café Premium` — **1.50 €**
-    * `Chocolate` — **2.00 €**
+    * `Café Solo`: **1.00 €**
+    * `Café Cortado`: **1.10 €**
+    * `Café Doble`: **1.25 €**
+    * `Café Premium`: **1.50 €**
+    * `Chocolate`: **2.00 €**
   * La navegación entre productos se realiza desplazando el joystick hacia arriba (`JOY_UP`) o hacia abajo (`JOY_DOWN`) donde se puede pasar del primero al último y viceversa, y la selección se confirma pulsando el botón integrado del joystick (`JOY_CLICK`).
 
 * **d. Preparación de la bebida (`SERV_PREPARANDO`):**
@@ -205,12 +201,10 @@ Permite la supervisión técnica en tiempo real y el ajuste dinámico de precios
 
 ## 6. Conclusiones
 
-El desarrollo de esta práctica ha permitido comprender muchas características del Arduino UNO, concretamente de su microcontrolador, y además aprender a utilizar ADC, PWM, Threads y el Watchdog en dicho controlador. A continuación, se describen algunas partes clave del desarrollo de la práctica:
+Con el desarrollo de esta práctica se han puesto en práctica los principales recursos del ATmega328P del Arduino UNO: entradas analógicas (ADC), salidas PWM, interrupciones, temporizadores, hilos cooperativos y el Watchdog.
 
-* **Arquitectura modular y reutilizable:** Separar el proyecto en 9 ficheros independientes encapsulando cada periférico en su propia clase heredada de `Thread` (`LedThread`, `UltrasonidosThread`, `DHTThread`, `JoystickThread`) y manteniendo la configuración, el catálogo, las interrupciones y la máquina de estados en módulos estructurados dando como resultado un código claro, fácil de depurar y con un bucle principal (`loop()`) minimalista.
-* **Reactividad sin retardos bloqueantes:** La planificación cooperativa mediante `ThreadController` y la gestión temporal con `millis()` eliminan por completo el uso de `delay()`, permitiendo atender de forma concurrente los sensores, el joystick, el refresco optimizado del LCD y la modulación PWM del `LED2` sin congelar la CPU. Además, se ahorran recursos desactivando los hilos que ya no son necesarios (`enabled = false`).
-* **Determinismo mediante interrupciones y gestión de timers:** El uso de la interrupción externa hardware `INT0` (Pin 2) con filtrado anti-rebote garantiza diferenciar entre la pulsación de cancelación (2–3 s) y la de administración (≥ 5 s), mientras que la interrupción software de `TimerOne` proporciona un contador exacto segundo a segundo. Se han planificado los pines evitando el conflicto entre `Timer1` y el PWM (asignando `LED2` al Pin 6, controlado por `Timer0`) para que ambos subsistemas actuaran sin interferencias.
-* **Reinicio frente fallos usando Watchdog Timer:** Configurar el Watchdog (`WDTO_4S`) aporta una capa de seguridad hardware frente a bloqueos imprevistos en lecturas de sensores, líneas de datos o interrupciones anómalas, asegurando que la máquina expendedora pueda reiniciarse automáticamente al Modo Arranque.
-* **Validación sobre hardware real:** Contrastar la simulación con el montaje físico en protoboard evidenció detalles críticos del entorno real que no aparecen en software, como la calibración del contraste (`V0`) y puesta a tierra de `RW` en la pantalla LCD, los rebotes mecánicos en los pulsadores o la necesidad de añadir una zona muerta en la lectura analógica del joystick para lograr una navegación precisa.
+Dividir el código en 9 ficheros (encapsulando cada periférico en su propia clase heredada de Thread) ha facilitado bastante la depuración y ha permitido dejar un loop() muy limpio. Gracias a ThreadController y a los controles de tiempo con millis() se ha eliminado por completo delay(), logrando leer los sensores, actualizar el LCD y variar el brillo de LED2 por PWM sin congelar el programa, además de desactivar los hilos cuando ya no hacen falta (enabled = false).
 
-En conjunto, la solución cumple todas las especificaciones funcionales y técnicas de los tres modos de operación (**Arranque**, **Servicio** y **Administración**), dando lugar a un controlador autónomo, reactivo y escalable.
+Por otro lado, usar la interrupción externa INT0 (Pin 2) con anti-rebote ha permitido distinguir sin fallos entre la pulsación de cancelación (2–3 s) y la de administración (≥ 5 s), mientras que TimerOne se encarga de llevar el contador de segundos con precisión. Para evitar que Timer1 interfiriera con el PWM, se llevó LED2 al Pin 6 (gobernado por Timer0). A esto se suma el Watchdog configurado a 4 segundos (WDTO_4S), que actúa como respaldo por si algún sensor o interrupción llegase a colgar la placa.
+
+Por último, pasar de la simulación en CirkitDesigner al montaje real en protoboard sacó a la luz problemas prácticos que en el simulador no aparecen, como el ajuste fino del contraste del LCD (V0) con el pin RW a masa, los rebotes físicos del pulsador o la necesidad de meter una zona muerta en los ejes del joystick para que el menú no salte solo.
