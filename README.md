@@ -49,7 +49,11 @@ La elección de pines se ha planificado cuidadosamente para evitar conflictos de
 
 ### 2.4. Montaje real
 
- ![Vista general del montaje](img/montaje_general.jpg) 
+ ![Vista general del montaje](montaje_real.jpeg)
+
+ ### 2.5. Vídeo de funcionamiento
+
+ ![Vídeo del funcionamiento](video.mp4)
 
 ---
 
