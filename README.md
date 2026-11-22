@@ -1,4 +1,4 @@
-# Práctica 3: Controlador de una máquina expendedora
+# Práctica 3: Controlador Máquina Expendedora
 
 **Asignatura:** Sistemas Empotrados y de Tiempo Real (SETR)  
 **Grado:** Ingeniería en Robótica Software — Universidad Rey Juan Carlos (URJC)  
