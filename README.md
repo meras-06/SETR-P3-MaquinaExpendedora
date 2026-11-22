@@ -34,7 +34,7 @@ La asignación de pines tiene en cuenta las funciones del ATmega328P y los tempo
 | :--- | :--- | :--- | :--- |
 | **Pulsador externo** | Terminal 1 / 2 | **Pin 2** / GND | Permite utilizar la interrupción externa `INT0` y la resistencia interna `INPUT_PULLUP`. |
 | **Joystick (botón)** | SW | **Pin 3** | Entrada digital con `INPUT_PULLUP`. |
-| **Joystick (ejes)** | VRx / VRy | **A1** / **A0** | Entradas analógicas del ADC de 10 bits (valores de 0 a 1023). |
+| **Joystick (ejes)** | VRx / VRy | **A0** / **A1** | Entradas analógicas del ADC de 10 bits (valores de 0 a 1023). |
 | **Sensor DHT11** | DATA | **Pin 4** | Comunicación digital con el sensor. |
 | **LED1 (estado)** | Ánodo (+) | **Pin 5** | Salida digital, con resistencia de 220 Ω hacia GND. |
 | **LED2 (progreso)** | Ánodo (+) | **Pin 6 (PWM)** | Salida PWM asociada a `Timer0`, adecuada para regular el brillo sin interferir con `TimerOne`, que utiliza `Timer1`. |
@@ -119,7 +119,7 @@ La rutina `isrBotonExterno()` debe ser breve. Registra el instante del cambio, a
 
 Los contactos de un pulsador mecánico pueden generar varios flancos durante unos milisegundos al cambiar de estado. Para reducir estos falsos cambios se aplica un antirrebote de **40 ms**, ignorando los cambios que se producen antes de que transcurra ese intervalo desde el último cambio aceptado.
 
-Las variables que se comparten entre las interrupciones y el programa principal se declaran `volatile`, entre ellas `contadorSegundos`, `tPresionBtnExt`, `tUltimoCambioISR`, `btnExtPresionado`, `flagCancelarServicio` y `flagToggleAdmin`. Esta declaración evita que el compilador mantenga en un registro un valor que puede cambiar fuera del flujo normal del programa. No obstante, `volatile` no garantiza que una operación sobre una variable de varios bytes sea atómica; las lecturas de esas variables deben protegerse cuando puedan coincidir con una actualización desde una ISR.
+Las variables que se comparten entre las interrupciones y el programa principal se declaran `volatile`, entre ellas `contadorSecs`, `tPresionBtn`, `tCambioISR`, `btnPresionado`, `flagCancelarServicio` y `flagAdmin`. Esta declaración evita que el compilador mantenga en un registro un valor que puede cambiar fuera del flujo normal del programa. No obstante, `volatile` no garantiza que una operación sobre una variable de varios bytes sea atómica; las lecturas de esas variables deben protegerse cuando puedan coincidir con una actualización desde una ISR.
 
 Durante la ejecución de una ISR, las interrupciones globales permanecen deshabilitadas. Por ello, la interrupción de `Timer0` que actualiza `millis()` no puede ejecutarse mientras se atiende la ISR. `millis()` no avanza dentro de ella y `delay()` no debe utilizarse en ese contexto. Esta es otra razón para mantener las rutinas de interrupción lo más cortas posible.
 
@@ -128,7 +128,7 @@ Durante la ejecución de una ISR, las interrupciones globales permanecen deshabi
 El ATmega328P dispone de tres temporizadores hardware: `Timer0`, `Timer1` y `Timer2`. En esta práctica se utiliza `Timer1` mediante la biblioteca `TimerOne` para generar una interrupción periódica de un segundo.
 
 - **`Timer0` (8 bits):** el núcleo de Arduino lo utiliza para funciones como `millis()`, `micros()` y `delay()`. También controla el PWM de los pines **5 y 6**, cuya frecuencia en el Arduino UNO es de aproximadamente **980 Hz**. Por eso `LED2` se conecta al pin 6: su brillo puede regularse mediante PWM sin utilizar `Timer1`.
-- **`Timer1` (16 bits):** se utiliza con `TimerOne`, configurado con un periodo de **1 000 000 µs (1 segundo)** para ejecutar `isrTimer1Segundo()` e incrementar `contadorSegundos`. Al utilizar `Timer1`, el PWM de los pines **9 y 10** deja de estar disponible para su uso normal. Estos pines se emplean como señales digitales del LCD, no para generar PWM.
+- **`Timer1` (16 bits):** se utiliza con `TimerOne`, configurado con un periodo de **1 000 000 µs (1 segundo)** para ejecutar `isrTimer1Sec()` e incrementar `contadorSecs`. Al utilizar `Timer1`, el PWM de los pines **9 y 10** deja de estar disponible para su uso normal. Estos pines se emplean como señales digitales del LCD, no para generar PWM.
 - **`Timer2` (8 bits):** controla el PWM de los pines **3 y 11**. Por tanto, el pin 11 no comparte temporizador con `TimerOne` y puede utilizarse como señal digital `E` del LCD.
 
 ### 4.3. Mecanismo de seguridad: Watchdog Timer
@@ -186,9 +186,9 @@ Es el modo normal de funcionamiento de la máquina. Se divide en cinco subestado
   - `Café Premium`: **1,50 €**
   - `Chocolate`: **2,00 €**
 
-  El usuario recorre la lista de forma circular moviendo el joystick hacia arriba o abajo (`JOY_UP` / `JOY_DOWN`) y selecciona una bebida con el botón integrado (`JOY_CLICK`).
-- **Preparación (`SERV_PREPARANDO`):** al confirmar la bebida se genera un tiempo pseudoaleatorio de preparación entre **4000 y 8000 ms**, mediante `random(4000, 8001)`. La función `randomSeed(analogRead(PIN_SEED))` se utiliza en `setup()` para inicializar el generador. La pantalla muestra `Preparando Cafe...` y, durante esta fase, se calcula el tiempo transcurrido con `millis()`. Ese valor se transforma al rango PWM de 0 a 255 mediante `map()`, aumentando progresivamente el brillo de `LED2` (pin 6) hasta completar la preparación.
-- **Retirada (`SERV_RETIRE`):** cuando termina el tiempo de preparación, se apaga `LED2` y la pantalla muestra `RETIRE BEBIDA` durante **3 segundos**. Después, la máquina vuelve a `SERV_ESPERA`.
+  El usuario recorre la lista de forma circular moviendo el joystick hacia arriba o abajo (`JOY_ARRIBA` / `JOY_ABAJO`) y selecciona una bebida con el botón integrado (`JOY_CLICK`).
+- **Preparación (`SERV_PREPARANDO`):** al confirmar la bebida se genera un tiempo pseudoaleatorio de preparación entre **4000 y 8000 ms**, mediante `random(4000, 8001)`. La función `randomSeed(analogRead(PIN_SEMILLA))` se utiliza en `setup()` para inicializar el generador. La pantalla muestra `Preparando Cafe...` y, durante esta fase, se calcula el tiempo transcurrido con `millis()`. Ese valor se transforma al rango PWM de 0 a 255 mediante `map()`, aumentando progresivamente el brillo de `LED2` (pin 6) hasta completar la preparación.
+- **Retirada (`SERV_RETIRAR`):** cuando termina el tiempo de preparación, se apaga `LED2` y la pantalla muestra `RETIRE BEBIDA` durante **3 segundos**. Después, la máquina vuelve a `SERV_ESPERA`.
 - **Cancelación mediante el pulsador externo:** durante las fases comprendidas entre `SERV_ENTORNO` y `SERV_RETIRE`, una pulsación mantenida entre **2 y 3 segundos** activa `flagCancelarServicio`. El programa cancela la operación en curso, apaga `LED2` y vuelve a `SERV_ESPERA`, sin reiniciar físicamente la placa.
 
 ### 3. Modo Administración (`MODO_ADMIN`)
@@ -197,10 +197,10 @@ Este modo permite consultar los sensores y modificar los precios de las bebidas 
 
 - **Acceso y salida (pulsación de 5 segundos o más):** se puede acceder desde cualquier modo manteniendo pulsado el botón externo durante al menos **5000 ms**. La función `verificarPulsacionLargaAdmin()` comprueba esta duración y realiza el cambio al Modo Administración. Para salir y volver al Modo Servicio se utiliza la misma pulsación.
 - **Indicadores:** al entrar mediante `entrarModoAdmin()`, `LED1` y `LED2` permanecen encendidos mientras la máquina está en este modo.
-- **Menú (`ADM_MENU`):** la pantalla muestra cuatro opciones: `a.Ver temp`, `b.Ver distancia`, `c.Ver contador` y `d.Modif precios`. Se recorren con el joystick hacia arriba y abajo y se seleccionan con `JOY_CLICK`. El movimiento hacia la izquierda (`JOY_LEFT`) permite volver a la pantalla anterior.
+- **Menú (`ADM_MENU`):** la pantalla muestra cuatro opciones: `a.Ver temp`, `b.Ver distancia`, `c.Ver contador` y `d.Modif precios`. Se recorren con el joystick hacia arriba y abajo y se seleccionan con `JOY_CLICK`. El movimiento hacia la izquierda (`JOY_IZQ`) permite volver a la pantalla anterior.
   1. **Ver temperatura (`ADM_TEMP`):** muestra las lecturas del DHT11 (`Temp: XX C` y `Hum: YY %`) y actualiza la información cada **500 ms**.
   2. **Ver distancia (`ADM_DIST`):** muestra la distancia medida por el HC-SR04 y actualiza el dato cada **250 ms**.
-  3. **Ver contador (`ADM_CONT`):** muestra los segundos transcurridos desde el encendido de Arduino, almacenados en `contadorSegundos` y actualizados por la interrupción de `Timer1`.
+  3. **Ver contador (`ADM_CONT`):** muestra los segundos transcurridos desde el encendido de Arduino, almacenados en `contadorSecs` y actualizados por la interrupción de `Timer1`.
   4. **Modificar precios (`ADM_SEL_PRECIO` → `ADM_EDIT_PRECIO`):** permite seleccionar un producto y copiar su precio a `precioTemp`. Al mover el joystick hacia arriba o abajo, el precio aumenta o disminuye en pasos de **0,05 €**. Al pulsar el botón se guarda el nuevo valor en `catalogo[indiceProd].precio`. El cambio se mantiene mientras la placa esté encendida, ya que no se utiliza EEPROM para guardar los precios. Si se mueve el joystick hacia la izquierda, se descartan los cambios y se vuelve a la lista de productos.
 
 ---
