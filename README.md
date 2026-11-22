@@ -209,7 +209,7 @@ Este modo permite consultar los sensores y modificar los precios de las bebidas 
 
 En esta práctica se ha diseñado y montado una máquina expendedora con Arduino UNO. Se ha trabajado con entradas analógicas, salidas PWM, interrupciones, temporizadores, tareas cooperativas y el Watchdog.
 
-La separación del programa en archivos y clases para los periféricos ha facilitado organizar el código y depurar cada parte. Para gestionar las tareas periódicas he utilizado `ArduinoThread`, mientras que las fases de funcionamiento se controlan mediante `millis()` en lugar de detener el programa con `delay()`.
+La separación del programa en archivos y clases para los periféricos ha facilitado organizar el código y depurar cada parte. Para gestionar las tareas periódicas se ha utilizado `ArduinoThread`, mientras que las fases de funcionamiento se controlan mediante `millis()` en lugar de detener el programa con `delay()`.
 
 También se ha utilizado la interrupción externa `INT0` para detectar las pulsaciones del botón y `TimerOne` para actualizar el contador de segundos. La elección del pin 6 para `LED2` permite regular su brillo mediante PWM de `Timer0` sin interferir con `Timer1`, que se utiliza para generar la interrupción periódica. Además, el Watchdog se ha configurado a cuatro segundos para reiniciar la placa si el programa deja de ejecutarse con normalidad.
 
