@@ -189,7 +189,7 @@ Es el modo normal de funcionamiento de la máquina. Se divide en cinco subestado
   El usuario recorre la lista de forma circular moviendo el joystick hacia arriba o abajo (`JOY_ARRIBA` / `JOY_ABAJO`) y selecciona una bebida con el botón integrado (`JOY_CLICK`).
 - **Preparación (`SERV_PREPARANDO`):** al confirmar la bebida se genera un tiempo pseudoaleatorio de preparación entre **4000 y 8000 ms**, mediante `random(4000, 8001)`. La función `randomSeed(analogRead(PIN_SEMILLA))` se utiliza en `setup()` para inicializar el generador. La pantalla muestra `Preparando Cafe...` y, durante esta fase, se calcula el tiempo transcurrido con `millis()`. Ese valor se transforma al rango PWM de 0 a 255 mediante `map()`, aumentando progresivamente el brillo de `LED2` (pin 6) hasta completar la preparación.
 - **Retirada (`SERV_RETIRAR`):** cuando termina el tiempo de preparación, se apaga `LED2` y la pantalla muestra `RETIRE BEBIDA` durante **3 segundos**. Después, la máquina vuelve a `SERV_ESPERA`.
-- **Cancelación mediante el pulsador externo:** durante las fases comprendidas entre `SERV_ENTORNO` y `SERV_RETIRE`, una pulsación mantenida entre **2 y 3 segundos** activa `flagCancelarServicio`. El programa cancela la operación en curso, apaga `LED2` y vuelve a `SERV_ESPERA`, sin reiniciar físicamente la placa.
+- **Cancelación mediante el pulsador externo:** durante las fases comprendidas entre `SERV_ENTORNO` y `SERV_RETIRAR`, una pulsación mantenida entre **2 y 3 segundos** activa `flagCancelarServicio`. El programa cancela la operación en curso, apaga `LED2` y vuelve a `SERV_ESPERA`, sin reiniciar físicamente la placa.
 
 ### 3. Modo Administración (`MODO_ADMIN`)
 
