@@ -12,6 +12,8 @@ En esta práctica se ha diseñado y montado el hardware y el software de control
 
 El sistema gestiona la interfaz de usuario, formada por una pantalla LCD, un joystick con botón, un pulsador externo y dos LEDs. También recoge información de un sensor de temperatura y humedad DHT11 y de un sensor de distancia por ultrasonidos HC-SR04. El programa se organiza en tres modos de funcionamiento: Arranque, Servicio y Administración.
 
+---
+
 ## 2. Montaje hardware
 
 ### 2.1. Componentes utilizados
